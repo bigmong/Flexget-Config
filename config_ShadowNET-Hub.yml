@@ -1,0 +1,535 @@
+# Built with Flexget 2.12.8
+variables: config_ShadowNET-Hub_personal.yml
+
+schedules:
+  # Run every 15 Minutes Everyday
+  - tasks: [TV_480_Private, TV_720_Private, Porn_Private]
+    interval:
+      minutes: 15
+  # Run every 2 Hour Everyday
+  - tasks: [TV_480_Find_Private, TV_720_Find_Private, TV_480_Find_Public, TV_720_Find_Public]
+    interval:
+      hours: 2
+  # Run every 3 Hour Everyday
+  - tasks: [Import_Trakt_Movies, Movies_Private]
+    interval:
+      hours: 3
+  # Run every 6 Hour Everyday
+  - tasks: [Movies_Find_Private, Movies_Find_Public, Clean_Trakt_Movies_Queue]
+    interval:
+      hours: 6
+  # Clean at 2 AM everyday
+  - tasks: [Clean_Seed_Queue]
+    schedule:
+      hour: 2
+  # Run at 9 AM Monday
+  - tasks: [EndedCancelled_Series]
+    schedule:
+      hour: 9
+      day_of_week: mon
+
+# Enable WebUI
+# ~/flexget/bin/flexget -c /mnt/Data/Torrents/Flexget/config_ShadowNET-Hub.yml web passwd 534eWMRT7SDCX9jucFhAwGeX7K4NNu
+web_server:
+  bind: 0.0.0.0
+  port: 5050
+  web_ui: yes
+  run_v2: yes
+
+templates:
+  global:
+    no_entries_ok: yes
+    # Check there's 20 GB free
+    free_space:
+      path: "{? config.mount ?}"
+      space: 20000
+    # Filter by file type
+    content_filter:
+      require:
+        - '*.avi'
+        - '*.mkv'
+        - '*.mp4'
+        - '*.r0*'
+        - '*.part0*'
+      reject:
+        - 'password.txt'
+        - '*.wmv'
+        - '*.exe'
+        - '*.zip'
+
+  Alerts:
+    # Notify
+    # https://flexget.com/Plugins/Notifiers
+    # https://flexget.com/Plugins/notify
+    notify:
+      entries:
+        title: "[flexget] {{task}}"
+        message: "{{title}}"
+        via:
+          - pushover:
+              user_key: "{? config.pushover.userkey ?}"
+              api_key: "{? config.pushover.apikey ?}"
+              sound: incoming
+
+  # Transmission Config
+  # ~/flexget/bin/pip install transmissionrpc
+  Transmission_Anchor:
+    _Transmission_Credentials: &Transmission_Credentials
+      host: localhost
+      port: 9091
+      username: "{? config.transmission.uid ?}"
+      password: "{? config.transmission.pwd ?}"
+
+  Transmission_Series_Private:
+    transmission:
+      <<: *Transmission_Credentials
+      path: "{? config.mount ?}/Torrents/Transmission/Completed/_TD_TV_"
+
+  Transmission_Series_Public:
+    transmission:
+      <<: *Transmission_Credentials
+      ratio: 0.10
+      path: "{? config.mount ?}/Torrents/Transmission/Completed/_TV_"
+
+  Transmission_Movies_Private:
+    transmission:
+      <<: *Transmission_Credentials
+      path: "{? config.mount ?}/Torrents/Transmission/Completed/_TD_MOVIES_"
+
+  Transmission_Movies_Public:
+    transmission:
+      <<: *Transmission_Credentials
+      ratio: 0.10
+      path: "{? config.mount ?}/Torrents/Transmission/Completed/_MOVIES_"
+
+  Transmission_Porn_Private:
+    transmission:
+      <<: *Transmission_Credentials
+      path: "{? config.mount ?}/Torrents/Transmission/Completed/_TD_PORN_"
+
+  # Tracker Config
+  Traker_Anchor:
+    _Torrentday_Credentials: &Torrentday_Credentials
+      uid: "{? config.trakers.td.u ?}"
+      passkey: "{? config.trakers.td.passkey ?}"
+      cfduid: "{? config.trakers.td.cfduid ?}"
+      rss_key: "{? config.trakers.td.tp ?}"
+    _IPTorrent_Credentials: &IPTorrent_Credentials
+      uid: "{? config.trakers.ip.u ?}"
+      rss_key: "{? config.trakers.ip.tp ?}"
+      password: "{? config.trakers.ip.password ?}"
+
+  # Trakt Config
+  Trakt_Anchor:
+    _Trakt_Credentials: &Trakt_Credentials
+      username: "{? config.trakt.uid ?}"
+      account: "{? config.trakt.account ?}"
+
+  # TV Config
+  # https://flexget.com/Qualities#Requirements
+  TV_480_Config:
+    configure_series:
+      settings:
+        propers: yes
+        quality: sdtv|webrip|hdtv|webdl <720p h264
+        identified_by: ep
+        season_packs: yes
+      from:
+        trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_480p
+          type: shows
+          strip_dates: yes
+    thetvdb_lookup: yes
+    torrent_alive: 2
+    if:
+      - '"CONVERT" in title': reject
+
+  TV_720_Config:
+    configure_series:
+      settings:
+        propers: yes
+        quality: 720p hdtv|webdl h264
+        target: 720p webdl h264 dd5.1+
+        timeframe: 1 hour
+        identified_by: ep
+        season_packs: yes
+      from:
+        trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_720p
+          type: shows
+          strip_dates: yes
+    thetvdb_lookup: yes
+    torrent_alive: 2
+    if:
+      - '"CONVERT" in title': reject
+
+  # Movie Config
+  Movie_Config:
+    tmdb_lookup: yes
+    imdb_lookup: no
+    torrent_alive: 2
+    proper_movies: yes
+    quality: 720p webrip|webdl|bluray h264
+    if:
+      - '"webdl" == quality.source and not ("AMZN" in title or "Amazon" in title or "NF" in title)': reject
+      - '"webrip" == quality.source and not ("AMZN" in title or "Amazon" in title or "NF" in title)': reject
+      - 'tmdb_year > now.year - 4 and "BRRIP" in title': reject
+      - '"EXTRAS" in title or "SUBPACK" in title or "SUBFIX" in title': reject
+
+tasks:
+##################
+#### TV TASKS ####
+##################
+
+  # Set Series beginning with
+  # ~/flexget/bin/flexget -c /mnt/Data/Torrents/Flexget/config_ShadowNET-Hub.yml execute --task Series_Set_Begin
+  Series_Set_Begin:
+    manual: yes
+    next_trakt_episodes:
+      <<: *Trakt_Credentials
+      list: collection
+      context: collected
+      position: next
+      strip_dates: yes
+    accept_all: yes
+    set_series_begin: yes
+    thetvdb_lookup: yes
+
+  # Private RSS Watching
+  TV_480_Private:
+    priority: 110
+    inputs:
+      # 24 = TV/480p
+      # 26 = TV/SD/x264
+      # 7  = TV/x264
+      # 14 = TV/Packs
+      - rss: { url: "https://www.torrentday.com/torrents/rss?download;24;26;7;14;u={? config.trakers.td.u ?};tp={? config.trakers.td.tp ?}", silent: yes, all_entries: no }
+      # 78 = TV/480p
+      # 79 = TV/SD/x264
+      # 5  = TV/x264
+      # 22 = TV/Web-DL
+      # 65 = TV/Packs
+      - rss: { url: "https://iptorrents.com/torrents/rss?download;78;79;5;22;65;u={? config.trakers.ip.u ?};tp={? config.trakers.ip.tp ?}", silent: yes, all_entries: no }
+    template:
+      - TV_480_Config
+      - Transmission_Series_Private
+      - Alerts
+  TV_720_Private:
+    priority: 111
+    inputs:
+      # 24 = TV/480p
+      # 26 = TV/SD/x264
+      # 7  = TV/x264
+      # 14 = TV/Packs
+      - rss: { url: "https://www.torrentday.com/torrents/rss?download;24;26;7;14;u={? config.trakers.td.u ?};tp={? config.trakers.td.tp ?}", silent: yes, all_entries: no }
+      # 78 = TV/480p
+      # 79 = TV/SD/x264
+      # 5  = TV/x264
+      # 22 = TV/Web-DL
+      # 65 = TV/Packs
+      - rss: { url: "https://iptorrents.com/torrents/rss?download;78;79;5;22;65;u={? config.trakers.ip.u ?};tp={? config.trakers.ip.tp ?}", silent: yes, all_entries: no }
+    template:
+      - TV_720_Config
+      - Transmission_Series_Private
+      - Alerts
+
+  # Private Show Search
+  TV_480_Find_Private:
+    priority: 120
+    discover:
+      what:
+        - next_series_seasons: yes
+        - next_series_episodes:
+            from_start: yes
+            backfill: no
+      from:
+        - torrentday:
+            <<: *Torrentday_Credentials
+        - iptorrents:
+            <<: *IPTorrent_Credentials
+    template:
+      - TV_480_Config
+      - Transmission_Series_Private
+      - Alerts
+  TV_720_Find_Private:
+    priority: 121
+    discover:
+      what:
+        - next_series_seasons: yes
+        - next_series_episodes:
+            from_start: yes
+            backfill: no
+      from:
+        - torrentday:
+            <<: *Torrentday_Credentials
+        - iptorrents:
+            <<: *IPTorrent_Credentials
+    template:
+      - TV_720_Config
+      - Transmission_Series_Private
+      - Alerts
+
+  # Public Show Search
+  TV_480_Find_Public:
+    priority: 140
+    delay: 3 hours
+    discover:
+      what:
+        - next_series_episodes: yes
+      from:
+        - rarbg:
+            # 18 = TV Episodes
+            # 41 = TV HD Episodes
+            category: [18, 41]
+        - limetorrents:
+            category: tv
+    template:
+      - TV_480_Config
+      - Transmission_Series_Public
+      - Alerts
+  TV_720_Find_Public:
+    priority: 141
+    delay: 3 hours
+    discover:
+      what:
+        - next_series_episodes: yes
+      from:
+        - rarbg:
+            # 18 = TV Episodes
+            # 41 = TV HD Episodes
+            category: [18, 41]
+        - limetorrents:
+            category: tv
+    template:
+      - TV_720_Config
+      - Transmission_Series_Public
+      - Alerts
+
+#####################
+#### MOVIE TASKS ####
+#####################
+
+  # Import Movies from Trakt
+  Import_Trakt_Movies:
+    priority: 200
+    trakt_list:
+      <<: *Trakt_Credentials
+      list: watchlist
+      type: movies
+    accept_all: yes
+    list_add:
+      - movie_list: TraktMovies
+#    template:
+#      - Movie_Config
+
+  # Clean Trakt Movie Queue
+  Clean_Trakt_Movies_Queue:
+    priority: 210
+    disable: [seen, movie_queue]
+    trakt_list:
+      <<: *Trakt_Credentials
+      list: watchlist
+      type: movies
+    if:
+      - trakt_collected: accept
+    list_remove:
+      - movie_list: TraktMovies
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: watchlist
+          type: movies
+    trakt_lookup:
+      <<: *Trakt_Credentials
+    
+
+  # Private RSS Watching
+  Movies_Private:
+    priority: 220
+    inputs:
+      # 11 = Movies/Bluray
+      - rss: { url: "https://www.torrentday.com/torrents/rss?download;11;u={? config.trakers.td.u ?};tp={? config.trakers.td.tp ?}", silent: yes, all_entries: no }
+      # 20 Movie/Web-DL
+      # 48 = Movies/HD/Blueray
+      - rss: { url: "https://iptorrents.com/torrents/rss?download;48;20;u={? config.trakers.ip.u ?};tp={? config.trakers.ip.tp ?}", silent: yes, all_entries: no }
+    list_match:
+      from:
+        - movie_list: TraktMovies
+    list_remove:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: watchlist
+
+    template:
+      - Movie_Config
+      - Transmission_Movies_Private
+      - Alerts
+
+  # Private Movie Search
+  Movies_Find_Private:
+    priority: 230
+    discover:
+      what:
+        - movie_list: TraktMovies
+      from:
+        - torrentday:
+            <<: *Torrentday_Credentials
+        - iptorrents:
+            <<: *IPTorrent_Credentials
+    list_match:
+      from:
+        - movie_list: TraktMovies
+    list_remove:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: watchlist
+    template:
+      - Movie_Config
+      - Transmission_Movies_Private
+      - Alerts
+
+  # Public Movie Search
+  Movies_Find_Public:
+    priority: 240
+    delay: 12 hours
+    discover:
+      what:
+        - movie_list: TraktMovies
+      from:
+        - rarbg:
+            # 17 = Movies/x264
+            # 45 = Movies/x264/720
+            category: [17, 45]
+        - limetorrents:
+            category: movies
+    list_match:
+      from:
+        - movie_list: TraktMovies
+    list_remove:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: watchlist
+    template:
+      - Movie_Config
+      - Transmission_Movies_Public
+      - Alerts
+
+#############################
+#### GENERAL MAINTENANCE ####
+#############################
+
+  Clean_Seed_Queue:
+    priority: 310
+    clean_transmission:
+      <<: *Transmission_Credentials
+      directories:
+        - \A/+{? config.mount2 ?}/+Torrents/+Transmission/+Completed/+_TD_SEEDING_(\Z|/+.*)
+      delete_files: yes
+      finished_for: 30 days
+    disable: details
+    notify:
+      task:
+        title: "[flexget] Clean Seed Queue"
+        always_send: yes
+        via:
+          - pushover:
+              user_key: "{? config.pushover.userkey ?}"
+              api_key: "{? config.pushover.apikey ?}"
+              sound: magic
+
+  EndedCancelled_Series:
+    priority: 320
+    trakt_lookup:
+      <<: *Trakt_Credentials
+    disable: seen
+    inputs:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_480p
+          type: shows
+          strip_dates: yes
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_720p
+          type: shows
+          strip_dates: yes
+    if:
+      - trakt_collected and trakt_series_status in ('ended', 'cancelled'): accept
+    list_add:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_Ended
+    list_remove:
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_480p
+          type: shows
+      - trakt_list:
+          <<: *Trakt_Credentials
+          list: FlexGet_720p
+          type: shows
+    notify:
+      task:
+        title: "[flexget] Finished Series"
+        message: |+
+          {% if task.aborted -%}
+          Task {{task_name}} was aborted because: {{task.abort_reason}}
+          {% endif -%}
+          {% if task.accepted -%}
+          {%- for group in task.accepted|groupby('task') %}
+          FlexGet has found {{group.list|length}} Ended/Cancelled Shows and you have collected all in your Config. They will be moved to your FlexGet_Ended list:
+            {%- for entry in group.list %}
+          - {{entry.title}}
+            {% endfor %}
+          {% endfor %}
+          {% endif -%}
+          {% if task.failed -%}
+          {%- for group in task.failed|groupby('task') %}
+          The following entries have failed for task {{group.grouper}}:
+            {%- for entry in group.list %}
+              - {{entry.title}} ({{entry.url}}) Reason: {{entry.reason|d('unknown')}}
+            {% endfor %}
+          {% endfor %}
+          {% endif %}
+        via:
+          - pushover:
+              user_key: "{? config.pushover.userkey ?}"
+              api_key: "{? config.pushover.apikey ?}"
+              sound: magic
+          - email:
+              from: "{? config.email.from ?}"
+              to: "{? config.email.to ?}"
+              smtp_host: "{? config.email.smtp_host ?}"
+              smtp_port: 587
+              smtp_username: "{? config.email.smtp_username ?}"
+              smtp_password: "{? config.email.smtp_password ?}"
+              smtp_tls: yes
+
+#  test:
+    
+##############
+#### PORN ####
+##############
+
+  # Private RSS Watching
+  Porn_Private:
+    priority: 410
+    series:
+      - MoneyTalks:
+          identified_by: date
+          date_yearfirst: yes
+      - DareDorm:
+          identified_by: date
+          date_yearfirst: yes
+      - BangBus:
+          identified_by: date
+          date_yearfirst: yes
+      - FemaleAgent:
+          identified_by: date
+          date_yearfirst: yes
+    inputs:
+      - rss: { url: "https://iptorrents.com/torrents/rss?u={? config.trakers.ip.u ?};tp={? config.trakers.ip.tp ?};8;download", silent: yes, all_entries: no }
+    template:
+      - Transmission_Porn_Private
+      - Alerts
