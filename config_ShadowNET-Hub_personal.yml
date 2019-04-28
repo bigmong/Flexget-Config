@@ -1,0 +1,34 @@
+config:
+  mount: 
+  transmission:
+    uid: 
+    pwd: 
+  pushover:
+    userkey: 
+    apikey: 
+  email:
+    from: 
+    to: 
+    smtp_host: 
+    smtp_username: 
+    smtp_password: 
+  trakt:
+    # ~/flexget/bin/flexget -c /mnt/Data/Torrents/Flexget/config_ShadowNET-Hub.yml trakt auth xxx
+    uid: 
+    account: xxx
+  trakers:
+    td:
+      # https://flexget.com/Searches/torrentday
+      # uid
+      u: 
+      # rss_key
+      tp: 
+      passkey: ""
+      cfduid: ""
+    ip:
+      # https://flexget.com/Searches/iptorrents
+      # uid
+      u: 
+      # rss_key
+      tp: 
+      password: ""
